@@ -1,0 +1,161 @@
+\$--- title: "R Notebook" output: html_notebook --- load libraries
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(readxl)
+```
+
+load in dataset
+
+```{r}
+path <- "Obesity_Dataset.xlsx"
+obesity <- read_xlsx(path = path )
+```
+
+EDA
+
+```{r}
+skimr::skim(obesity)
+obesity <- obesity %>% mutate(Overweight_Obese_Family = factor(Overweight_Obese_Family),
+                   Consumption_of_Fast_Food = factor(Consumption_of_Fast_Food),
+                   Frequency_of_Consuming_Vegetables = factor(Frequency_of_Consuming_Vegetables),
+                   Number_of_Main_Meals_Daily = factor(Number_of_Main_Meals_Daily),
+                   Food_Intake_Between_Meals = factor(Food_Intake_Between_Meals),
+                   Smoking = factor(Smoking),
+                   Liquid_Intake_Daily = factor(Liquid_Intake_Daily),
+                   Calculation_of_Calorie_Intake = factor(Calculation_of_Calorie_Intake),
+                   Physical_Excercise = factor(Physical_Excercise),
+                   Schedule_Dedicated_to_Technology = factor(Schedule_Dedicated_to_Technology),
+                   Type_of_Transportation_Used = factor(Type_of_Transportation_Used),
+                   Class = factor(Class),
+                   Sex = factor(Sex))
+obesity
+```
+
+```{r}
+obesity$Class <- factor(obesity$Class,
+                        levels = c(1,2,3,4), 
+                        labels = c("Underweight", "Normal", "Overweight", "Obesity"))
+
+obesity$Sex <- factor(obesity$Sex, 
+                      levels = c(1,2),
+                      labels = c("Male", "Female"))
+
+obesity$Overweight_Obese_Family <- factor(obesity$Overweight_Obese_Family, 
+                                          levels = c(1,2),
+                                          labels = c("Yes", "No"))
+obesity$Consumption_of_Fast_Food <- factor(obesity$Consumption_of_Fast_Food,
+                             levels = c(1,2),
+                             labels = c("Yes", "No"))
+
+obesity$Smoking <- factor(obesity$Smoking,
+                           levels = c(1,2),
+                           labels = c("Yes", "No"))
+
+obesity$Calculation_of_Calorie_Intake <- factor(obesity$Calculation_of_Calorie_Intake,
+                                                 levels = c(1,2),
+                                                 labels = c("Yes", "No"))
+obesity$Type_of_Transportation_Used <- factor(obesity$Type_of_Transportation_Used,
+                                              levels = c(1,2,3,4,5),
+                                              labels = c("Automobile", "Motorbike", "Bike", "Public transportation", "Walking"))
+
+
+```
+
+##MODEL BUILDING
+
+```{r}
+#dataset splitting 
+set.seed(567)
+obesity_split <- initial_split(obesity, strata = Class)
+obesity_train <- training(obesity_split)
+obesity_test <- testing(obesity_split)
+
+```
+ Cross validation
+```{r}
+set.seed(234)
+obesity_folds <- vfold_cv(obesity_train,
+                          v = 10)
+```
+
+Pre-processing
+
+```{r}
+obesity_prep <- recipe(formula = Class ~ ., data = obesity_train) %>% 
+  step_dummy(Overweight_Obese_Family, Consumption_of_Fast_Food,
+             Calculation_of_Calorie_Intake, Smoking, one_hot = FALSE) %>% 
+  step_dummy(Type_of_Transportation_Used, one_hot = TRUE)
+```
+
+
+ Model specification
+```{r}
+rf_obesity <- rand_forest( 
+  mtry = tune(), min_n = tune(), trees = 1000
+  ) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+rf_wf <- workflow() %>% 
+  add_recipe(obesity_prep) %>% 
+  add_model(rf_obesity)
+```
+
+```{r}
+doParallel::registerDoParallel()
+set.seed(235678)
+rf_tune <- tune_grid(rf_wf, 
+                     resamples = obesity_folds,
+                     grid = 11)
+```
+#explore results
+
+```{r}
+show_best(rf_tune, metric = "roc_auc")
+show_best(rf_tune, metric = "accuracy")
+autoplot(rf_tune)
+```
+ 
+Finalize workflow
+
+```{r}
+final_wf <-  rf_wf %>% 
+  finalize_workflow(select_best(rf_tune))
+
+final_wf
+```
+
+Fit model
+
+```{r}
+obesity_fit <- last_fit(final_wf, obesity_split)
+
+obesity_fit
+collect_metrics(obesity_fit)
+```
+
+```{r}
+library(vip)
+imp_spec <- rf_obesity %>% 
+  finalize_model(select_best(rf_tune, metric = "accuracy")) %>% 
+                   set_engine("ranger", importance = "permutation")
+  workflow() %>% add_recipe(obesity_prep) %>% 
+    add_model(imp_spec) %>% 
+    fit(obesity_train) %>% 
+    extract_fit_parsnip() %>% 
+    vip(aesthetics = list(alpha = 0.8, fill = "midnightblue"))
+```
+
+```{r}
+obesity_fit %>% select(.pred_class, Class) %>% table()
+
+```
+
+
+
+
+
+
+
